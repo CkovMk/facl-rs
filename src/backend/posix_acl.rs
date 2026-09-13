@@ -68,6 +68,7 @@ pub fn backup(path: &str, recursive: bool) -> Result<PathBuf> {
 }
 
 /// Restore an ACL from a backup file produced by [`backup`].
+#[allow(dead_code)]
 pub fn restore(path: &str, backup_file: &std::path::Path) -> Result<()> {
     run_stdout(
         "setfacl",

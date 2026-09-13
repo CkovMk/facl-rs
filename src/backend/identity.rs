@@ -29,15 +29,18 @@ fn lookup(database: &str, name_or_id: &str) -> Result<Identity> {
 }
 
 /// All users known to the system (from `getent passwd`).
+#[allow(dead_code)]
 pub fn list_users() -> Result<Vec<Identity>> {
     list("passwd")
 }
 
 /// All groups known to the system (from `getent group`).
+#[allow(dead_code)]
 pub fn list_groups() -> Result<Vec<Identity>> {
     list("group")
 }
 
+#[allow(dead_code)]
 fn list(database: &str) -> Result<Vec<Identity>> {
     let out = run_stdout("getent", &[database])?;
     Ok(out

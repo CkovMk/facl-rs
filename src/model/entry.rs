@@ -92,6 +92,7 @@ impl EntryKind {
     }
 
     /// Base entries always exist in an access ACL and cannot be added/removed.
+    #[allow(dead_code)]
     pub fn is_base(self) -> bool {
         matches!(
             self,
@@ -165,6 +166,7 @@ impl AclEntry {
     }
 
     /// Whether two entries address the same slot (scope + kind + identity).
+    #[allow(dead_code)]
     pub fn same_slot(&self, other: &AclEntry) -> bool {
         self.scope == other.scope
             && self.kind == other.kind

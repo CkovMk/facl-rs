@@ -12,8 +12,11 @@ mod identity;
 mod ownership;
 mod posix_acl;
 
+#[allow(unused_imports)]
 pub use identity::{Identity, list_groups, list_users, lookup_group, lookup_user};
+#[allow(unused_imports)]
 pub use ownership::{chown, stat};
+#[allow(unused_imports)]
 pub use posix_acl::{AclHandle, backup, parse_getfacl, read, restore, write};
 
 use std::process::Command;

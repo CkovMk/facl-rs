@@ -54,6 +54,7 @@ impl Acl {
     }
 
     /// Whether the ACL has any default entries.
+    #[allow(dead_code)]
     pub fn has_default(&self) -> bool {
         self.entries.iter().any(|e| e.scope == Scope::Default)
     }

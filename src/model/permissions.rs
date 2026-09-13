@@ -59,6 +59,7 @@ impl Permissions {
         write: false,
         execute: false,
     };
+    #[allow(dead_code)]
     pub const ALL: Permissions = Permissions {
         read: true,
         write: true,
@@ -73,6 +74,7 @@ impl Permissions {
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_bits(bits: u8) -> Self {
         Self {
             read: bits & 4 != 0,
@@ -82,6 +84,7 @@ impl Permissions {
     }
 
     /// The numeric 0-7 value of these bits.
+    #[allow(dead_code)]
     pub fn bits(self) -> u8 {
         let mut b = 0;
         if self.read {
@@ -144,10 +147,12 @@ impl Permissions {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_none(self) -> bool {
         !self.read && !self.write && !self.execute
     }
 
+    #[allow(dead_code)]
     pub fn is_all(self) -> bool {
         self.read && self.write && self.execute
     }
