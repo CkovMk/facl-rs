@@ -1,0 +1,16 @@
+[package]
+name = "facl-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A terminal ACL editor for Linux POSIX ACLs"
+license = "Apache-2.0"
+
+[dependencies]
+ratatui = "0.26"
+crossterm = "0.27"
+clap = { version = "~4.4", features = ["derive"] }
+anyhow = "1"
+
+[profile.release]
+lto = true
+strip = true
