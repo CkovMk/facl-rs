@@ -14,3 +14,46 @@ anyhow = "1"
 [profile.release]
 lto = true
 strip = true
+
+# ---------------------------------------------------------------------------
+# Distro packaging metadata.
+#
+# These sections are consumed by external cargo subcommands, not by
+# `cargo build` itself:
+#   * cargo-deb            -> `cargo deb`           (.deb for Debian/Ubuntu)
+#   * cargo-generate-rpm   -> `cargo generate-rpm`  (.rpm for Fedora/RHEL)
+#
+# Both require a prior `cargo build --release`. The runtime dependency is the
+# `acl` package, which provides getfacl/setfacl; coreutils provides
+# stat/chown and getent lives in libc/glibc.
+# ---------------------------------------------------------------------------
+
+[package.metadata.deb]
+maintainer = "facl-rs maintainers"
+copyright = "Apache-2.0"
+extended-description = """\
+A fast, keyboard-driven terminal UI for editing Linux POSIX ACLs on any file \
+or directory. Reads and writes through the standard getfacl, setfacl, stat, \
+chown and getent tools; no graphical stack and no FFI."""
+
+section = "admin"
+priority = "optional"
+# Runtime deps: acl for get/setfacl, coreutils for stat/chown. $auto adds the
+# shared-library dependencies detected from the binary.
+depends = "$auto, acl, coreutils"
+assets = [
+    ["target/release/facl-rs", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/facl-rs/README.md", "644"],
+    ["LICENSE", "usr/share/doc/facl-rs/LICENSE", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "A terminal ACL editor for Linux POSIX ACLs"
+# RPM package-level runtime requirements.
+requires = { acl = "*", coreutils = "*" }
+assets = [
+    { source = "target/release/facl-rs", dest = "/usr/bin/facl-rs", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/facl-rs/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/doc/facl-rs/LICENSE", mode = "644", doc = true },
+]
+

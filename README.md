@@ -29,6 +29,27 @@ cargo build --release
 ./target/release/facl-rs <PATH>
 ```
 
+### Building distro packages
+
+`cargo build` only produces the `facl-rs` binary — it cannot emit `.deb` or
+`.rpm` artifacts on its own. Packaging metadata lives in `Cargo.toml`
+(`[package.metadata.deb]` and `[package.metadata.generate-rpm]`) and is
+consumed by two optional cargo subcommands:
+
+```sh
+# Debian/Ubuntu (.deb)
+cargo install cargo-deb
+cargo deb                 # builds release + writes target/debian/*.deb
+
+# Fedora/RHEL (.rpm)
+cargo install cargo-generate-rpm
+cargo build --release
+cargo generate-rpm        # writes target/generate-rpm/*.rpm
+```
+
+Both packages declare `acl` as a runtime dependency and install the binary to
+`/usr/bin/facl-rs` plus docs under `/usr/share/doc/facl-rs/`.
+
 ## Usage
 
 ```sh
