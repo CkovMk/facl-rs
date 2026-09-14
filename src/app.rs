@@ -146,6 +146,24 @@ impl App {
         let original_group = object.group.clone();
         let owner = original_owner.clone();
         let group = original_group.clone();
+        // Enter read-only mode when requested on the command line or when the
+        // current user is not allowed to modify this object's ACL. Checking up
+        // front means editing keys are disabled and the reason is shown,
+        // rather than letting a save fail later.
+        let writable = backend::can_modify(&object).unwrap_or(false);
+        let read_only = cli.read_only || !writable;
+        let status = if !writable && !cli.read_only {
+            Status {
+                level: StatusLevel::Info,
+                message: "read-only: you do not own this object; ACL changes are not permitted"
+                    .to_string(),
+            }
+        } else {
+            Status {
+                level: StatusLevel::Info,
+                message: "loaded".to_string(),
+            }
+        };
         Ok(Self {
             running: true,
             object,
@@ -160,12 +178,9 @@ impl App {
             selected: 0,
             perm_cursor: 0,
             list_filter: ListFilter::All,
-            status: Status {
-                level: StatusLevel::Info,
-                message: "loaded".to_string(),
-            },
+            status,
             dialog: None,
-            read_only: cli.read_only,
+            read_only,
             mask_policy: cli.mask,
             recursive: false,
             backup_path: None,

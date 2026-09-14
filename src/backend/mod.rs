@@ -15,7 +15,8 @@ mod posix_acl;
 #[allow(unused_imports)]
 pub use identity::{Identity, list_groups, list_users, lookup_group, lookup_user};
 #[allow(unused_imports)]
-pub use ownership::{chown, stat};
+pub use ownership::{can_modify, chown, current_uid, stat};
+
 #[allow(unused_imports)]
 pub use posix_acl::{AclHandle, backup, parse_getfacl, read, restore, write};
 
