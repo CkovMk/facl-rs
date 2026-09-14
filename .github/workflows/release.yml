@@ -1,0 +1,110 @@
+# Build .deb and .rpm packages and publish them to a release on tag push.
+#
+# This workflow is written to run on BOTH GitHub Actions and Gitea Actions.
+# Gitea reads WORKFLOW_DIRS = [".gitea/workflows", ".github/workflows"], so it
+# scans .gitea/ first and falls back to .github/; keeping the workflow here
+# covers both hosts. Everything up to the release step is portable; only the
+# "create release" step differs between the two platforms.
+#
+# Platform detection: GitHub sets GITHUB_ACTIONS=true, but Gitea's act_runner
+# ALSO sets GITHUB_ACTIONS=true for compatibility, so GITHUB_ACTIONS cannot
+# distinguish the two. The runner additionally sets GITEA_ACTIONS=true
+# specifically as the discriminator (internal/app/run/runner.go:
+# "Set specific environments to distinguish between Gitea and GitHub"). So the
+# release step is split into two mutually-exclusive steps keyed on
+# env.GITEA_ACTIONS: it is "true" only on Gitea and unset on GitHub.
+
+name: Release Packages
+
+on:
+
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # dpkg-dev for .deb assembly; liblzma-dev/pkg-config so cargo-deb's
+      # xz2 dependency can build/link. Guarded so it is a no-op if apt or
+      # sudo are unavailable on a minimal runner image.
+      - name: Install system build dependencies
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            SUDO=""
+            command -v sudo >/dev/null 2>&1 && SUDO="sudo"
+            $SUDO apt-get update
+            $SUDO apt-get install -y --no-install-recommends \
+              dpkg-dev liblzma-dev pkg-config
+          fi
+
+      # MSRV is 1.75.0 (see AGENTS.md); pin the toolchain so packages are
+      # built with the same compiler the project supports.
+      - name: Install Rust 1.75.0
+        run: |
+          if command -v rustup >/dev/null 2>&1; then
+            rustup toolchain install 1.75.0 --profile minimal
+            rustup default 1.75.0
+          else
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --default-toolchain 1.75.0 --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+
+      # cargo-deb / cargo-generate-rpm newer releases require rustc >= 1.85
+      # (edition2024). Pin the last MSRV-1.75-compatible versions and use
+      # --locked so their own lockfiles are honored.
+      - name: Install packaging subcommands
+        run: |
+          cargo install cargo-deb --version 2.12.1 --locked
+          cargo install cargo-generate-rpm --version 0.14.1 --locked
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Build .deb
+        run: cargo deb --no-build
+
+      - name: Build .rpm
+        run: cargo generate-rpm
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp target/release/facl-rs dist/
+          cp target/debian/*.deb dist/
+          cp target/generate-rpm/*.rpm dist/
+          ls -l dist
+
+      # Artifact upload is best-effort: the artifact backend version differs
+      # between GitHub and older Gitea runners, so do not fail the run on it.
+      - name: Upload build artifacts
+        continue-on-error: true
+        uses: actions/upload-artifact@v3
+        with:
+          name: packages
+          path: dist/*
+
+      # ---- Release creation (platform-specific, mutually exclusive) ----
+
+      # GitHub Actions path. Skipped on Gitea (GITEA_ACTIONS == 'true' there).
+      - name: Create GitHub release
+        if: ${{ startsWith(github.ref, 'refs/tags/') && env.GITEA_ACTIONS != 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+      # Gitea Actions path. Only runs on the Gitea runner.
+      - name: Create Gitea release
+        if: ${{ startsWith(github.ref, 'refs/tags/') && env.GITEA_ACTIONS == 'true' }}
+        uses: https://gitea.com/actions/gitea-release-action@main
+        with:
+          files: dist/*
