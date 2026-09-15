@@ -1,10 +1,34 @@
-# Build .deb and .rpm packages and publish them to a release on tag push.
+# Build release artifacts and publish them to a release on tag push.
+#
+# Artifacts produced:
+#   * facl-rs-x86_64-unknown-linux-gnu    dynamically linked (glibc) binary
+#   * facl-rs-x86_64-unknown-linux-musl   fully static (musl) binary, runs on
+#                                         any Linux x86_64 regardless of glibc
+#   * facl-rs-<version>-x86_64.deb        Debian package (built on Debian 12)
+#   * facl-rs-<version>-x86_64.rpm        RPM package
+# Each binary ships with a matching .sha256 sidecar (bare 64-char digest).
 #
 # This workflow is written to run on BOTH GitHub Actions and Gitea Actions.
 # Gitea reads WORKFLOW_DIRS = [".gitea/workflows", ".github/workflows"], so it
 # scans .gitea/ first and falls back to .github/; keeping the workflow here
 # covers both hosts. Everything up to the release step is portable; only the
 # "create release" step differs between the two platforms.
+#
+# All `uses:` references use the short `owner/repo@ref` form, never a full
+# URL: GitHub rejects URL references when it prepares a job's actions (before
+# any `if:` is evaluated), and Gitea's runner resolves short names against its
+# default action instance, which is github.com unless the runner sets
+# DEFAULT_ACTION_INSTANCE — so every action referenced here must exist on
+# github.com. `akkuman/gitea-release-action` is the upstream of the
+# gitea.com/actions mirror.
+#
+# Every job pins `container: node:20-bookworm`. This is required for Gitea's
+# act_runner: it runs each job inside the image mapped to the runs-on label,
+# and if a runner maps ubuntu-latest to a bare image with no node, the JS-based
+# actions (checkout, upload-artifact, download-artifact) fail with
+# "exec: node: not found". Pinning a node-provisioned image makes those actions
+# work on any runner. node:20-bookworm is Debian 12, so apt is available for
+# build dependencies and cargo-deb resolves $auto shlib deps against Debian.
 #
 # Platform detection: GitHub sets GITHUB_ACTIONS=true, but Gitea's act_runner
 # ALSO sets GITHUB_ACTIONS=true for compatibility, so GITHUB_ACTIONS cannot
@@ -27,84 +51,210 @@ permissions:
   contents: write
 
 jobs:
-  packages:
+  # Plain executables for both the glibc and musl targets. The musl target
+  # links statically by default (crt-static is on for *-musl), so that binary
+  # runs on any Linux x86_64 regardless of the host glibc.
+  binaries:
     runs-on: ubuntu-latest
+    container:
+      image: node:20-bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # dpkg-dev for .deb assembly; liblzma-dev/pkg-config so cargo-deb's
-      # xz2 dependency can build/link. Guarded so it is a no-op if apt or
-      # sudo are unavailable on a minimal runner image.
+      # musl-tools provides musl-gcc, needed to link the musl target.
       - name: Install system build dependencies
         run: |
-          if command -v apt-get >/dev/null 2>&1; then
-            SUDO=""
-            command -v sudo >/dev/null 2>&1 && SUDO="sudo"
-            $SUDO apt-get update
-            $SUDO apt-get install -y --no-install-recommends \
-              dpkg-dev liblzma-dev pkg-config
-          fi
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl gcc musl-tools
 
-      # MSRV is 1.75.0 (see AGENTS.md); pin the toolchain so packages are
-      # built with the same compiler the project supports.
+      # MSRV is 1.75.0 (see AGENTS.md); pin the toolchain and add the target.
       - name: Install Rust 1.75.0
         run: |
-          if command -v rustup >/dev/null 2>&1; then
-            rustup toolchain install 1.75.0 --profile minimal
-            rustup default 1.75.0
-          else
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --default-toolchain 1.75.0 --profile minimal
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
-
-      # cargo-deb / cargo-generate-rpm newer releases require rustc >= 1.85
-      # (edition2024). Pin the last MSRV-1.75-compatible versions and use
-      # --locked so their own lockfiles are honored.
-      - name: Install packaging subcommands
-        run: |
-          cargo install cargo-deb --version 2.12.1 --locked
-          cargo install cargo-generate-rpm --version 0.14.1 --locked
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain 1.75.0 --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          . "$HOME/.cargo/env"
+          rustup target add ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release
+        run: |
+          . "$HOME/.cargo/env"
+          cargo build --release --target ${{ matrix.target }}
 
-      - name: Build .deb
-        run: cargo deb --no-build
-
-      - name: Build .rpm
-        run: cargo generate-rpm
-
-      - name: Collect artifacts
+      # Rename to facl-rs-<target>, drop a bare-digest .sha256 sidecar next to
+      # it, and hand both to the upload step.
+      - name: Collect binary
         run: |
           mkdir -p dist
-          cp target/release/facl-rs dist/
-          cp target/debian/*.deb dist/
-          cp target/generate-rpm/*.rpm dist/
-          ls -l dist
+          cp target/${{ matrix.target }}/release/facl-rs dist/facl-rs-${{ matrix.target }}
+          cd dist
+          sha256sum facl-rs-${{ matrix.target }} | cut -d' ' -f1 \
+            > facl-rs-${{ matrix.target }}.sha256
+          ls -l
 
-      # Artifact upload is best-effort: the artifact backend version differs
-      # between GitHub and older Gitea runners, so do not fail the run on it.
-      - name: Upload build artifacts
-        continue-on-error: true
-        uses: actions/upload-artifact@v3
+      - name: Upload binary artifacts
+        if: ${{ env.GITEA_ACTIONS != 'true' }}
+        uses: actions/upload-artifact@v4
         with:
-          name: packages
+          name: facl-rs-${{ matrix.target }}
           path: dist/*
 
-      # ---- Release creation (platform-specific, mutually exclusive) ----
+      - name: Upload binary artifacts
+        if: ${{ env.GITEA_ACTIONS == 'true' }}
+        uses: christopherHX/gitea-upload-artifact@v4
+        with:
+          name: facl-rs-${{ matrix.target }}
+          path: dist/*
+
+  # .deb built on Debian 12 (node:20-bookworm) so cargo-deb's $auto
+  # shared-library dependency detection resolves against Debian's packages.
+  deb:
+    runs-on: ubuntu-latest
+    container:
+      image: node:20-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl gcc dpkg-dev liblzma-dev pkg-config
+
+      - name: Install Rust 1.75.0
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain 1.75.0 --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build .deb
+        id: build
+        run: |
+          . "$HOME/.cargo/env"
+          cargo install cargo-deb --version 2.12.1 --locked
+          cargo deb
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+          cp target/debian/*.deb "dist/facl-rs-${version}-x86_64.deb"
+          ls -l dist
+
+      - name: Upload .deb artifact
+        if: ${{ env.GITEA_ACTIONS != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: facl-rs-${{ steps.build.outputs.version }}-x86_64.deb
+          path: dist/*
+
+      - name: Upload .deb artifact
+        if: ${{ env.GITEA_ACTIONS == 'true' }}
+        uses: christopherHX/gitea-upload-artifact@v4
+        with:
+          name: facl-rs-${{ steps.build.outputs.version }}-x86_64.deb
+          path: dist/*
+
+  # .rpm built with cargo-generate-rpm. It is cross-distro: it packages the
+  # binary plus the explicit `requires` from Cargo.toml into an .rpm, so it does
+  # not need rpmbuild or a Fedora host. Building on Debian here is fine.
+  rpm:
+    runs-on: ubuntu-latest
+    container:
+      image: node:20-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl gcc liblzma-dev pkg-config
+
+      - name: Install Rust 1.75.0
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain 1.75.0 --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build .rpm
+        id: build
+        run: |
+          . "$HOME/.cargo/env"
+          cargo install cargo-generate-rpm --version 0.14.1 --locked
+          cargo build --release
+          cargo generate-rpm
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+          cp target/generate-rpm/*.rpm "dist/facl-rs-${version}-x86_64.rpm"
+          ls -l dist
+
+      - name: Upload .rpm artifact
+        if: ${{ env.GITEA_ACTIONS != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: facl-rs-${{ steps.build.outputs.version }}-x86_64.rpm
+          path: dist/*
+
+      - name: Upload .rpm artifact
+        if: ${{ env.GITEA_ACTIONS == 'true' }}
+        uses: christopherHX/gitea-upload-artifact@v4
+        with:
+          name: facl-rs-${{ steps.build.outputs.version }}-x86_64.rpm
+          path: dist/*
+
+  # Gather every artifact and attach it to the release. Split into two
+  # mutually-exclusive steps keyed on env.GITEA_ACTIONS (see header).
+  release:
+    needs: [binaries, deb, rpm]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    container:
+      image: node:20-bookworm
+    steps:
+      # Gitea stores v4-style artifacts as one client-side zip blob (recorded
+      # as "<name>.zip"). The official v3 action speaks the older v1 artifact
+      # API, so on Gitea it downloads that blob verbatim instead of extracting
+      # it — the release would then ship zips. The v4 action (and this fork,
+      # which drops the GHES restriction) downloads the same blob but unzips it
+      # into <path>/<artifact-name>/, matching GitHub's layout.
+      - name: Download all artifacts
+        if: ${{ env.GITEA_ACTIONS != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Download all artifacts
+        if: ${{ env.GITEA_ACTIONS == 'true' }}
+        uses: christopherHX/gitea-download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts into dist/
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -l dist
 
       # GitHub Actions path. Skipped on Gitea (GITEA_ACTIONS == 'true' there).
       - name: Create GitHub release
-        if: ${{ startsWith(github.ref, 'refs/tags/') && env.GITEA_ACTIONS != 'true' }}
+        if: ${{ env.GITEA_ACTIONS != 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
 
       # Gitea Actions path. Only runs on the Gitea runner.
       - name: Create Gitea release
-        if: ${{ startsWith(github.ref, 'refs/tags/') && env.GITEA_ACTIONS == 'true' }}
-        uses: https://gitea.com/actions/gitea-release-action@main
+        if: ${{ env.GITEA_ACTIONS == 'true' }}
+        uses: akkuman/gitea-release-action@main
         with:
           files: dist/*
